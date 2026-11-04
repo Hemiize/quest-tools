@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
-from . import __version__, kb, probe, store, term, transfer, ui, updates
+from . import __version__, battery, kb, probe, store, term, transfer, ui, updates
 from .adb import AdbError, list_devices, pick
 from .ui import c
 
@@ -139,6 +139,9 @@ class App:
             parts.append(c("Temp ", "grey") + c(f"{hot:.0f}°C", "green" if hot < 38 else "yellow" if hot < 45 else "red"))
         if s.get("refresh_hz"):
             parts.append(c(f"{s['refresh_hz']} Hz", "grey"))
+        warn = battery.warnings(s)
+        if warn:
+            parts.append("  ".join(c("! " + t, "red" if lv == "err" else "yellow", "bold") for lv, t in warn))
         r2 = c("   ·   ", "grey").join(parts)
         dis = s.get("disabled", [])
         prof = store.config().get("profile", {}).get(s.get("hwid", serial))
@@ -455,6 +458,8 @@ def main_menu(app: App) -> list[tuple]:
          "connect/disconnect, pairing, select device.", lambda: connection(app)),
         ("0", "Tools", "shell, history, undo", "adb shell, command library, change log, "
          "undo changes, Quest Tools settings.", lambda: tools_menu(app)),
+        ("m", "Modes", "streaming, battery, private", "Switch several settings at once - performance and "
+         "network. One undo reverts a whole switch. Save your own modes.", lambda: modes_menu(app)),
         ("r", "Repair", "purchases, panels, tracking", "Detect and fix known problems: Store purchases gone "
          "or apps under 'Unknown sources', Store apps that will not install, missing home panels, dead "
          "controllers/tracking.", lambda: repair_menu(app)),
@@ -475,6 +480,8 @@ def overview(app: App):
          lambda: app.run(["info"], "Device info")),
         ("5", "Connected devices", "", "All devices connected via USB/Wi-Fi.",
          lambda: app.run(["devices"], "Devices")),
+        ("6", "Battery", "health, drain, history", "Headset and controller battery, temperature, estimated "
+         "battery health, drain/charge rate and a history of samples.", lambda: app.run(["battery"], "Battery")),
     ])
 
 
@@ -754,6 +761,8 @@ def apps_menu(app: App):
         ("4", "Disabled apps", "", "All disabled packages.", lambda: browse("disabled")),
         ("5", "Install app (APK + OBB)", "files or a game folder", "Install APK files (split APKs too). OBB data "
          "files in the same folder are copied to /sdcard/Android/obb/<package>/ automatically.", install),
+        ("6", "Storage & cleanup", "caches, unused games", "Where the space goes, clear app caches, and remove "
+         "games you have not played for a while - with a save-game backup first.", lambda: storage_menu(app)),
     ])
 
 
@@ -1068,6 +1077,104 @@ def connection(app: App):
 
 
 # ---------------------------------------------------------------------- 0 Tools
+
+def storage_menu(app: App):
+    def clean():
+        mode = app.select("Clear app caches", [
+            Item("Clear now", "go", desc="Removes temporary cache files of all apps. App data, logins and save "
+                                         "games are not touched."),
+            Item("Dry run", "dry")])
+        if mode:
+            app.run(["storage", "clean"] + (["-n"] if mode == "dry" else []), "Clear caches")
+
+    def unused():
+        from .commands.storage import _apps
+        days = app.select("Not played for at least …", [Item(f"{d} days", d) for d in (30, 60, 90, 180)], start=1)
+        if not days:
+            return
+        dev = app.guard(app.dev)
+        if not dev:
+            return
+        app.busy("Reading apps and usage history …")
+        apps = app.guard(_apps, dev)
+        if apps is None:
+            return
+        rows = sorted([a for a in apps if a["days_unused"] is None or a["days_unused"] >= days],
+                      key=lambda a: a["total"], reverse=True)
+        if not rows:
+            return app.message(f"Every app was used within the last {days} days.", "ok")
+        items = [Item(a["package"], a["package"],
+                      hint=f"{ui.human_bytes(a['total']):>9}  " + c(f"last played {a['last_used'] or 'unknown'}", "grey"))
+                 for a in rows]
+        total = sum(a["total"] for a in rows)
+        sel = app.select(f"Not played for {days}+ days", items, multi=True,
+                         subtitle=f"{len(rows)} apps · {ui.human_bytes(total)} · Space to mark, Enter to continue")
+        if not sel:
+            return
+        act = app.select(f"{len(sel)} app(s)", [
+            Item("Back up (with save game), then uninstall", "backup",
+                 desc="Saves APK + /sdcard/Android/data + obb to ~/Quest/backups, then removes the apps. "
+                      "Restore later via Backups & Settings."),
+            Item("Uninstall without backup", "plain", desc="Save games stored on the headset are lost."),
+            Item("Only back up", "only")])
+        if not act:
+            return
+        if act in ("backup", "only"):
+            rc = app.run(["backup", "create", *sel], "Backup", pause=(act == "only"))
+            if act == "only":
+                return
+            if rc != 0:
+                return app.message("Backup failed - nothing was uninstalled.", "err")
+        for pkg in sel:
+            app.run(["-y", "apps", "uninstall", pkg], f"Uninstall {pkg}", pause=False, refresh=False)
+        term.wait_key()
+        app.refresh()
+
+    app.submenu("Storage & cleanup", [
+        ("1", "Overview", "", "Free space, what uses it and the biggest apps with their last use.",
+         lambda: app.run(["storage"], "Storage")),
+        ("2", "Clear app caches", "safe", "Frees cache files of all apps - nothing important is deleted.", clean),
+        ("3", "Games not played for a while", "backup + uninstall", "Pick old games, back up their save "
+         "games and remove them in one go.", unused),
+    ])
+
+
+def modes_menu(app: App):
+    from .commands.mode import BUILTIN, _state, all_modes, matches
+    while True:
+        dev = app.guard(app.dev)
+        if not dev:
+            return
+        st = app.guard(_state, dev)
+        if st is None:
+            return
+        modes = all_modes()
+        items = [Item(n, ("apply", n), hint=(c("● active  ", "green") if matches(m, st) else "          ")
+                      + c(("custom" if m.get("custom") else "built-in"), "grey"), desc=m.get("description", ""))
+                 for n, m in modes.items()]
+        items += [Item("Save current settings as a mode …", ("save", None),
+                       desc="Stores the current performance values and network state under a name."),
+                  Item("Delete one of my modes …", ("delete", None))]
+        ch = app.select("Modes", items, subtitle="Enter switches · one undo reverts a whole switch")
+        if not ch:
+            return
+        kind, name = ch
+        if kind == "apply":
+            app.run(["mode", "apply", name], f"Mode {name}")
+        elif kind == "save":
+            n = term.ask("Name for the mode", hint="letters, digits, - and _")
+            if n:
+                msg = term.ask("Description (optional)", default="")
+                app.run(["mode", "save", n] + (["-m", msg] if msg else []), "Save mode")
+        else:
+            own = [n for n, m in modes.items() if m.get("custom")]
+            if not own:
+                app.message("You have no custom modes yet.")
+                continue
+            d = app.select("Delete mode", [Item(n, n) for n in own])
+            if d:
+                app.run(["mode", "delete", d], "Delete mode")
+
 
 def repair_menu(app: App):
     def run_fix(kind: str, title: str):

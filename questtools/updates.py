@@ -9,7 +9,7 @@ restores it after taking a settings snapshot.
 
 from __future__ import annotations
 
-from . import kb, store
+from . import battery, kb, store
 
 NEVER_RESTORE = (kb.KEEP, kb.PROTECTED)
 
@@ -62,6 +62,11 @@ def track(s: dict) -> dict:
     if cur and (changed or not old or (not pending and sorted(disabled) != prev.get("disabled"))):
         seen[hwid] = {"os": cur, "ts": store.now_iso(), "disabled": sorted(disabled)}
         store.set_config("seen", seen)
+
+    try:
+        battery.log(s)
+    except OSError:
+        pass
 
     known = cfg.get("known", {})
     entry = {"model": s.get("model"), "ip": s.get("ip") or known.get(hwid, {}).get("ip"),
