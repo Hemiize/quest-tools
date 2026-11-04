@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .. import kb, probe, store, ui, updates
+from .. import battery, kb, probe, store, ui, updates
 from ..adb import AdbError, list_devices
 from ..ui import c
 from . import add
@@ -13,6 +13,8 @@ def register(sub, common):
     add(sub, common, "info", "Detailed device information", cmd_info)
     add(sub, common, "status", "Overview: battery, controllers, temperatures, performance, privacy", cmd_status,
         aliases=["st"])
+    add(sub, common, "battery", "Battery: level, temperature, health estimate, drain rate and history",
+        cmd_battery, aliases=["bat"])
     add(sub, common, "doctor", "Health check with concrete fixes", cmd_doctor)
 
 
@@ -103,6 +105,8 @@ def cmd_status(ctx):
         return
     os_txt = f"Horizon OS v{s['horizon_os']}" if s["horizon_os"] else f"Android {s['android']}"
     ui.banner(f"{s['model']}", f"{s['serial']} · {os_txt}")
+    for level, text in battery.warnings(s):
+        (ui.err if level == "err" else ui.warn)(text)
     if upd["old"]:
         ui.warn(f"Firmware update detected: v{upd['old']} → v{upd['new']}.")
     if upd["pending"]:
@@ -226,14 +230,12 @@ def cmd_doctor(ctx):
             findings.append(("info", f"{len(tele)} telemetry packages active, no profile set.",
                              "questtools debloat apply telemetry --dry-run"))
 
-    b = s["battery"]
-    if b["temp_c"] and b["temp_c"] >= 42:
-        findings.append(("warn", f"Battery is warm ({b['temp_c']:.1f} °C).", None))
-    if b["level"] is not None and b["level"] <= 15 and b["status"] != "charging":
-        findings.append(("warn", f"Battery almost empty ({b['level']} %).", None))
-    for ctl in s.get("controllers", []):
-        if ctl["battery"] is not None and ctl["battery"] <= 15:
-            findings.append(("warn", f"Controller {ctl['side']}: battery {ctl['battery']} %.", None))
+    for level, text in battery.warnings(s):
+        findings.append((level, text, "questtools battery" if "°C" not in text else None))
+    cap = battery.capacity(s)
+    if cap["health_pct"] and cap["health_pct"] < 80:
+        findings.append(("warn", f"Battery health estimate {cap['health_pct']} % "
+                         f"({cap['estimated_mah']} of {cap['design_mah']} mAh).", "questtools battery"))
     st = s.get("storage")
     if st and st["total"] and st["free"] / st["total"] < 0.08:
         findings.append(("warn", f"Storage almost full ({ui.human_bytes(st['free'])} free).", "questtools apps list --sort size"))
@@ -259,3 +261,55 @@ def cmd_doctor(ctx):
         if fix:
             print(c("    → ", "grey") + c(fix, "cyan"))
     return 1 if any(f[0] == "err" for f in findings) else 0
+
+
+def cmd_battery(ctx):
+    with ui.Spinner("Reading battery …"):
+        s = probe.collect(ctx.dev)
+        updates.track(s)  # also logs a sample
+    rows = battery.read(s["hwid"])
+    cap = battery.capacity(s)
+    dis, chg = battery.rate(rows, "discharging"), battery.rate(rows, "charging")
+    b = s["battery"]
+    if ctx.emit({"battery": b, "controllers": s.get("controllers"), "capacity": cap, "discharge": dis,
+                 "charge": chg, "warnings": battery.warnings(s), "samples": len(rows)}):
+        return
+    ui.banner("Battery", f"{s['model']} · {s['serial']}")
+    for level, text in battery.warnings(s):
+        (ui.err if level == "err" else ui.warn)(text)
+    ui.section("Now")
+    power = "AC adapter" if b["ac"] else "USB" if b["usb"] else "battery"
+    rows_kv = [("Headset", f"{_level_bar(b['level'])}  {c(b['status'] or '', 'grey')} · {power}"),
+               ("Temperature", _temp(b["temp_c"]))]
+    for ctl in s.get("controllers", []):
+        rows_kv.append((f"Controller {ctl['side']}", _level_bar(ctl["battery"])))
+    ui.kv(rows_kv)
+    ui.section("Health (estimate)")
+    if cap["estimated_mah"]:
+        hp = cap["health_pct"]
+        ui.kv([("Full capacity", f"~{cap['estimated_mah']} mAh" + (f" of {cap['design_mah']} mAh rated" if cap["design_mah"] else "")),
+               ("Health", c(f"~{hp} %", "green" if hp >= 90 else "yellow" if hp >= 80 else "red") if hp else None)])
+        ui.hint("Estimated from the fuel gauge's charge counter; most accurate near 100 %.")
+    else:
+        ui.info("Not enough data (charge to at least 20 %).")
+    ui.section("Usage")
+    def fmt_rate(r, kind):  # noqa: E306
+        if not r:
+            return c("needs a few samples over 15+ min - keep Quest Tools open while you play/charge", "grey")
+        pph = abs(r["pct_per_hour"])
+        txt = f"{pph:.1f} %/h over {r['hours']} h"
+        if kind == "discharging" and pph > 0:
+            txt += c(f"  → about {ui.duration(r['level'] / pph * 3600)} left", "grey")
+        if kind == "charging" and pph > 0:
+            txt += c(f"  → full in about {ui.duration((100 - r['level']) / pph * 3600)}", "grey")
+        return txt
+    ui.kv([("Drain", fmt_rate(dis, "discharging")), ("Charging", fmt_rate(chg, "charging"))])
+    if rows:
+        ui.section(f"History (last {min(len(rows), 12)} of {len(rows)} samples)")
+        for r in rows[-12:]:
+            ctl = " ".join(f"{k[0].upper()} {r[k]}%" for k in ("left", "right") if r[k] is not None)
+            print(f"  {c(r['dt'].strftime('%m-%d %H:%M'), 'grey')}  {_level_bar(r['level'], 10)}  "
+                  f"{c(ui.pad(r['status'] or '', 12), 'grey')} {c(ctl, 'grey')}")
+    print()
+    ui.hint("Samples are recorded whenever Quest Tools reads the status (at most every 5 minutes).")
+

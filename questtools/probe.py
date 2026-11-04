@@ -81,6 +81,7 @@ def collect(dev: Device, deep: bool = True) -> dict:
         "temp_c": (_num(bat.get("temperature")) or 0) / 10 or None,
         "ac": bat.get("AC powered") == "true",
         "usb": bat.get("USB powered") == "true",
+        "charge_uah": _num(bat.get("Charge counter"), int),
     }
 
     lines = [ln for ln in raw["df"].splitlines() if ln.startswith("/")]

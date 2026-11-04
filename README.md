@@ -51,6 +51,12 @@
 - **Live view on your PC** via [scrcpy](https://github.com/Genymobile/scrcpy), cropped to one eye so it
   looks like a normal screen. The display stays on without wearing the headset. scrcpy is downloaded
   and set up automatically on first use (SHA-256 verified).
+- **Modes.** *Streaming*, *Battery*, *Private* (offline) or *Normal*: switch performance and network
+  settings in one go, save your own modes, and revert a whole switch with one undo.
+- **Storage cleanup.** See where the space goes, clear all app caches safely, and find games you
+  haven't played for weeks: back up their save games and uninstall them in one step.
+- **Battery & temperature.** Warnings in the status bar for low controllers, a low headset battery or
+  heat, an estimated battery health, drain/charge rate with time left, and a history log.
 - **Performance tuning.** CPU/GPU levels, fixed foveated rendering, eye-buffer resolution, refresh
   rate, presets and a live monitor.
 - **Zero dependencies.** Pure Python standard library plus `adb`. Every function also works from the
@@ -121,16 +127,17 @@ Quest Tools finds `adb` on its own: the `adb_path` setting, then `QUESTTOOLS_ADB
 
 | | Menu | What's inside |
 |---|---|---|
-| 1 | **Overview** | status · health check · live monitor · device info · connected devices |
+| 1 | **Overview** | status · health check · live monitor · device info · connected devices · battery (health, drain, history) |
 | 2 | **Privacy & Debloat** | telemetry report · check / apply profile (with dry run) · disable & enable packages from a checklist · full package analysis · explain a package · offline mode · Private DNS (AdGuard, Mullvad, Quad9, …) · save your own profile |
 | 3 | **Performance** | current values · presets (battery → max) · CPU/GPU level · foveation (dynamic/fixed) · eye-buffer resolution · refresh rate · reset · process list · live monitor |
 | 4 | **Headset** | FPS overlay · Guardian · proximity sensor · Phone SDK · SDK throttling · restart VR shell · reboot (normal/bootloader/recovery) · volume · key events · type text · open URL |
-| 5 | **Apps** | apps sorted by size → details & permissions · launch · stop · backup with save game · export APK · per-app logcat · grant/revoke permissions · clear data · uninstall · install APK + OBB, files or a whole game folder (drag & drop) |
+| 5 | **Apps** | apps sorted by size → details & permissions · launch · stop · backup with save game · export APK · per-app logcat · grant/revoke permissions · clear data · uninstall · install APK + OBB, files or a whole game folder (drag & drop) · **storage & cleanup** (overview, clear caches, back up + remove games not played for a while) |
 | 6 | **Backups & Settings** | settings snapshot · diff · selective/exact restore · app backups with save games · restore · browse settings |
 | 7 | **Media** | screenshot (raw / wake headset / system) · screen recording · **live view on the PC** (scrcpy, one eye or both, optional recording) · filtered, colourised logcat |
 | 8 | **Files** | arrow-key file browser · download · delete · upload · disk usage |
 | 9 | **Connection** | one-step Wi-Fi ADB setup · **find headset on the network** · **keep Wi-Fi ADB on** · connect by IP · disconnect · pairing · choose device |
 | 0 | **Tools** | adb shell · command library · change history · undo · run any command · install/update scrcpy · configuration |
+| m | **Modes** | normal · streaming · battery · private · save your own · delete |
 | r | **Repair** | check for known problems · fix Store purchases & installs · fix missing home panels · restore after a firmware update · fix dead tracking/controllers |
 
 ## 🛡️ How it keeps you safe
@@ -188,6 +195,10 @@ python -m questtools perf preset performance
 python -m questtools --json status          # machine-readable
 python -m questtools repair store --dry-run
 python -m questtools repair update             # after a firmware update
+python -m questtools mode apply streaming      # streaming mode (undo reverts it)
+python -m questtools storage unused --days 90  # games not played for 90 days
+python -m questtools storage clean             # clear app caches
+python -m questtools battery                   # battery health, drain rate, history
 python -m questtools apps install "C:\Games\MyGame"   # APK + OBB folder
 python -m questtools wifi find                 # find the headset on the LAN
 python -m questtools wifi keep on
@@ -229,10 +240,12 @@ questtools/
   kb.py            knowledge base, classification, built-in profiles
   probe.py         full device status in a single adb call
   updates.py       firmware-update tracking and pending restores
+  battery.py       battery/temperature warnings, history log, health estimate
   scrcpy_install.py  downloads, verifies and installs scrcpy for the live view
   transfer.py      pull/push with progress (name, MB, %)
   ui.py            colours, tables, bars, prompts
-  commands/        device, repair, debloat, perf, quest, apps, settings, net, media, mirror, files, backup, tools
+  commands/        device, repair, mode, debloat, perf, quest, apps, storage, settings, net, media, mirror,
+                   files, backup, tools
 tools/
   tuidemo.py       replay the UI with scripted keys (tests, screenshots)
   termshot.py      renders the SVG screenshots in this README
