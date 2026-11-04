@@ -18,7 +18,7 @@ import re
 import time
 from types import SimpleNamespace
 
-from .. import kb, ops, store, ui
+from .. import kb, ops, probe, store, ui, updates
 from ..adb import AdbError
 from ..ui import c
 from . import add, dry, group
@@ -38,6 +38,8 @@ def register(sub, common):
     p = dry(add(g, common, "panels", "Fix missing home panels / library / universal menu", cmd_panels))
     p.add_argument("--clear-shell", action="store_true",
                    help="also clear the VR shell's data (helps against a crash loop, resets its layout)")
+    dry(add(g, common, "update", "Re-disable packages a firmware update switched back on (snapshot first)",
+            cmd_update))
     p = add(g, common, "tracking", "Fix dead controllers / tracking (reboot when the tracking service died)",
             cmd_tracking)
     p.add_argument("--force", action="store_true", help="reboot even if the tracking service looks fine")
@@ -222,6 +224,30 @@ def cmd_panels(ctx):
     dev.sh("am force-stop com.oculus.vrshell")
     ui.ok("VR shell restarted - the panels should appear within a few seconds.")
     ui.hint("Still nothing? Reboot: questtools quest reboot")
+
+
+def cmd_update(ctx):
+    """Restores the pre-update state: packages that were disabled before the firmware update
+    (and packages of the applied profile). A settings snapshot is taken first."""
+    from .debloat import _apply_list
+    dev = ctx.dev
+    with ui.Spinner("Reading the headset state …"):
+        s = probe.collect(dev, deep=False)
+        upd = updates.track(s)
+    pend = upd["pending"]
+    pkgs = list(pend["packages"]) if pend else []
+    prof, drift = updates.profile_drift(s["hwid"], set(s["installed"]), set(s["disabled"]))
+    pkgs = sorted(set(pkgs) | set(drift))
+    title = f"v{pend['from']} → v{pend['to']}" if pend else (f"profile '{prof}'" if prof else "")
+    ui.banner("Restore after firmware update", title)
+    if not pkgs:
+        ui.ok("Nothing to restore - no package was switched back on.")
+        updates.clear(s["hwid"])
+        return 0
+    res = _apply_list(ctx, pkgs, "repair update", force=False)
+    if res is not None and (not res or any(r["ok"] for r in res)):
+        updates.clear(s["hwid"])
+    ctx.emit(res or [])
 
 
 def cmd_tracking(ctx):

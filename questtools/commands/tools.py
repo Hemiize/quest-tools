@@ -49,7 +49,7 @@ def register(sub, common):
     _, g = group(sub, common, "config", "questtools settings (adb_path, default_serial …)")
     add(g, common, "show", "Show configuration", cmd_config_show)
     p = add(g, common, "set", "Set a value", cmd_config_set)
-    p.add_argument("key", choices=["adb_path", "default_serial", "last_wifi"])
+    p.add_argument("key", choices=["adb_path", "scrcpy_path", "default_serial", "last_wifi"])
     p.add_argument("value")
     p = add(g, common, "unset", "Remove a value", cmd_config_unset)
     p.add_argument("key")

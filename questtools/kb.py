@@ -167,3 +167,11 @@ VERDICT_LABEL = {
     PRIVACY: ("recommended", "green"),
     OPTIONAL: ("optional", "cyan"),
 }
+
+
+def short_name(pkg: str) -> str:
+    """com.oculus.bugreportuploader -> bugreportuploader, com.meta.federatedcomputing.oculus -> federatedcomputing.oculus"""
+    for prefix in ("com.oculus.", "com.meta.", "com.facebook.", "com.android.", "com.google.android."):
+        if pkg.startswith(prefix):
+            return pkg[len(prefix):]
+    return pkg

@@ -7,10 +7,14 @@ Several device commands can be bundled into ONE `adb shell` call
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import shutil
+import socket
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -271,15 +275,16 @@ def pick(serial: str | None = None) -> Device:
     if not ready:
         if devs:
             _check_state(devs[0])
-        last = store.config().get("last_wifi")
-        if last:
-            r = run_raw(["connect", last], timeout=8)
-            if "connected" in r.out and "cannot" not in r.out:
-                return Device(last)
+        found = reconnect_wifi()
+        if found:
+            return Device(found)
         raise AdbError("No device connected.",
                        "Plug in the USB cable and allow debugging, or: questtools wifi connect <ip>")
     if len(ready) == 1:
-        return Device(ready[0].serial, ready[0])
+        d = ready[0]
+        if not d.wifi:
+            keep_wifi_alive(d.serial)
+        return Device(d.serial, d)
     pref = store.config().get("default_serial")
     for d in ready:
         if d.serial == pref:
@@ -291,6 +296,120 @@ def pick(serial: str | None = None) -> Device:
         if len(hw) == 1:
             return Device(usb[0].serial, usb[0])
     raise AdbError("Multiple devices connected - pick one with -s <serial>.", _devlist(ready))
+
+
+# --------------------------------------------------------------------------- Wi-Fi ADB
+
+def _connect(ep: str, timeout: float = 6) -> bool:
+    try:
+        r = run_raw(["connect", ep], timeout=timeout)
+    except AdbError:
+        return False
+    return "connected to" in r.out and "cannot" not in r.out and "failed" not in r.out
+
+
+def local_subnets() -> list[str]:
+    """Private /24 networks of this PC, e.g. ['192.168.2']."""
+    primary = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))  # no packet is sent; picks the default interface
+            primary.append(s.getsockname()[0])
+    except OSError:
+        pass
+    others = set()
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            others.add(info[4][0])
+    except OSError:
+        pass
+    nets = []
+    # the default-route network first (the home LAN), virtual adapters (WSL, Hyper-V) after it
+    for ip in primary + sorted(others - set(primary), key=lambda x: (not x.startswith("192.168."), x)):
+        a = ipaddress.ip_address(ip)
+        if a.is_private and not a.is_loopback and not a.is_link_local:
+            net = ip.rsplit(".", 1)[0]
+            if net not in nets:
+                nets.append(net)
+    return nets[:4]
+
+
+def scan_adb_port(port: int = 5555, timeout: float = 0.3, nets: list[str] | None = None) -> list[str]:
+    """IPs in the local /24 networks that accept TCP connections on the adb port."""
+    hosts = [f"{n}.{i}" for n in (nets or local_subnets()) for i in range(1, 255)]
+
+    def probe(ip):
+        try:
+            with socket.create_connection((ip, port), timeout=timeout):
+                return ip
+        except OSError:
+            return None
+    with ThreadPoolExecutor(max_workers=128) as ex:
+        return [ip for ip in ex.map(probe, hosts) if ip]
+
+
+def find_wifi_headsets(port: int = 5555, known_only: bool = True) -> list[tuple[str, str]]:
+    """Scans the LAN and connects to headsets with Wi-Fi ADB enabled. -> [(ip:port, hwid)]"""
+    known = store.config().get("known", {})
+    out = []
+    for ip in scan_adb_port(port):
+        ep = f"{ip}:{port}"
+        if not _connect(ep):
+            continue
+        hw = run_raw(["-s", ep, "shell", "getprop ro.serialno"], timeout=8).text
+        model = run_raw(["-s", ep, "shell", "getprop ro.product.model"], timeout=8).text
+        if (known_only and hw in known) or (not known_only and ("quest" in model.lower() or hw in known)):
+            out.append((ep, hw))
+        else:
+            run_raw(["disconnect", ep], timeout=5)
+    return out
+
+
+def reconnect_wifi() -> str | None:
+    """No device attached: try the last address, the last IPs of known headsets, then a LAN scan."""
+    cfg = store.config()
+    tried = []
+    for ep in [cfg.get("last_wifi")] + [f"{k['ip']}:{k.get('port') or 5555}" for k in cfg.get("known", {}).values()
+                                        if k.get("ip")]:
+        if ep and ep not in tried:
+            tried.append(ep)
+            if _connect(ep, timeout=4):
+                return ep
+    if cfg.get("known") and cfg.get("auto_find", True):
+        found = find_wifi_headsets()
+        if found:
+            store.set_config("last_wifi", found[0][0])
+            return found[0][0]
+    return None
+
+
+_kept_alive: set[str] = set()
+
+
+def keep_wifi_alive(usb_serial: str, port: int = 5555) -> str | None:
+    """With "wifi_keep" on: re-enable Wi-Fi ADB whenever the headset is on USB but tcpip mode is off
+    (after every reboot). Returns the Wi-Fi endpoint if it was (re)enabled."""
+    if not store.config().get("wifi_keep") or usb_serial in _kept_alive or os.environ.get("QUESTTOOLS_NO_KEEPALIVE"):
+        return None
+    _kept_alive.add(usb_serial)
+    if run_raw(["-s", usb_serial, "shell", "getprop service.adb.tcp.port"], timeout=8).text:
+        return None  # already listening
+    m = re.search(r"\bsrc (\d+\.\d+\.\d+\.\d+)", run_raw(["-s", usb_serial, "shell", "ip route get 1"], timeout=8).out)
+    if not m:
+        return None  # headset not on Wi-Fi
+    run_raw(["-s", usb_serial, "tcpip", str(port)], timeout=15)
+    # adbd restarts - wait until the USB connection is back before continuing
+    for _ in range(30):
+        time.sleep(0.5)
+        if any(d.serial == usb_serial and d.state == "device" for d in list_devices()):
+            break
+    ep = f"{m.group(1)}:{port}"
+    if _connect(ep):
+        store.set_config("last_wifi", ep)
+        import sys
+        print(f"  (keep-alive: Wi-Fi ADB re-enabled at {ep})", file=sys.stderr)
+        return ep
+    return None
 
 
 def _check_state(d: DeviceEntry) -> None:

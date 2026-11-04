@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .. import kb, probe, store, ui
+from .. import kb, probe, store, ui, updates
 from ..adb import AdbError, list_devices
 from ..ui import c
 from . import add
@@ -31,23 +31,10 @@ def cmd_devices(ctx):
                "Wi-Fi" if d.wifi else "USB"] for d in devs])
 
 
-def _save_seen(s: dict) -> str | None:
-    """Remembers the firmware per device; returns the old version if it changed."""
-    seen = store.config().get("seen", {})
-    key = s["hwid"]
-    cur = s.get("horizon_os") or s.get("build")
-    old = seen.get(key, {}).get("os")
-    if cur and old != cur:
-        seen[key] = {"os": cur, "ts": store.now_iso()}
-        store.set_config("seen", seen)
-        return old
-    return None
-
-
 def cmd_info(ctx):
     with ui.Spinner("Reading device information …"):
         s = probe.collect(ctx.dev)
-    if ctx.emit({k: v for k, v in s.items() if k != "props"}):
+    if ctx.emit({k: v for k, v in s.items() if k not in ("props", "installed")}):
         return
     ui.banner(s["model"] or "Device", s["serial"])
     ui.section("System")
@@ -111,14 +98,16 @@ def _temp(v) -> str:
 def cmd_status(ctx):
     with ui.Spinner("Querying status …"):
         s = probe.collect(ctx.dev)
-    if ctx.emit({k: v for k, v in s.items() if k != "props"}):
+    upd = updates.track(s)
+    if ctx.emit({k: v for k, v in s.items() if k not in ("props", "installed")} | {"update": upd}):
         return
-    old_os = _save_seen(s)
     os_txt = f"Horizon OS v{s['horizon_os']}" if s["horizon_os"] else f"Android {s['android']}"
     ui.banner(f"{s['model']}", f"{s['serial']} · {os_txt}")
-    if old_os:
-        ui.warn(f"Firmware update detected: v{old_os} → v{s['horizon_os'] or s['build']}. "
-                "Updates often re-enable disabled packages - questtools debloat check")
+    if upd["old"]:
+        ui.warn(f"Firmware update detected: v{upd['old']} → v{upd['new']}.")
+    if upd["pending"]:
+        ui.warn(f"The update from v{upd['pending']['from']} switched {len(upd['pending']['packages'])} disabled "
+                "packages back on → questtools repair update")
 
     ui.section("Power")
     b = s["battery"]
@@ -193,10 +182,14 @@ def cmd_doctor(ctx):
         installed = ctx.dev.packages()
     findings: list[tuple[str, str, str | None]] = []  # (level, text, fix)
 
-    old_os = _save_seen(s)
-    if old_os:
-        findings.append(("warn", f"Firmware updated since the last run: v{old_os} → v{s['horizon_os']}",
-                         "questtools debloat check"))
+    upd = updates.track(s)
+    if upd["old"]:
+        findings.append(("info", f"Firmware updated since the last run: v{upd['old']} → v{upd['new']}", None))
+    if upd["pending"]:
+        pk = upd["pending"]["packages"]
+        findings.append(("warn", f"The firmware update re-enabled {len(pk)} packages you had disabled: "
+                         + ", ".join(kb.short_name(x) for x in pk[:6]) + (" …" if len(pk) > 6 else ""),
+                         "questtools repair update"))
 
     for pkg in s["disabled"]:
         e = kb.lookup(pkg)
@@ -225,7 +218,7 @@ def cmd_doctor(ctx):
         drift = [x for x in want if x in installed and x not in s["disabled"]]
         if drift:
             findings.append(("warn", f'{len(drift)} packages from profile "{prof}" are active again: '
-                                     + ", ".join(x.split(".")[-1] for x in drift[:6])
+                                     + ", ".join(kb.short_name(x) for x in drift[:6])
                                      + (" …" if len(drift) > 6 else ""), f"questtools debloat apply {prof}"))
     else:
         tele = [x for x in installed if kb.is_telemetry(x) and x not in s["disabled"]]

@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable
 
-from . import __version__, kb, probe, store, term, transfer, ui
+from . import __version__, kb, probe, store, term, transfer, ui, updates
 from .adb import AdbError, list_devices, pick
 from .ui import c
 
@@ -35,6 +35,7 @@ class Status:
     loading: bool = False
     version: int = 0
     conn: dict = field(default_factory=dict)
+    update: dict | None = None
 
 
 GRADIENT = [141, 141, 177, 177, 213, 213, 219, 219, 225, 225, 231]
@@ -68,11 +69,12 @@ class App:
                 devs = list_devices()
                 dev = pick(self.serial)
                 data = probe.collect(dev)
+                upd = updates.track(data)
                 ready = [d for d in devs if d.state == "device"]
                 conn = {"usb": any(not d.wifi for d in ready), "wifi": [d.serial for d in ready if d.wifi],
                         "count": len({d.model for d in ready})}
                 with self._lock:
-                    self.st.data, self.st.error, self.st.conn = data, None, conn
+                    self.st.data, self.st.error, self.st.conn, self.st.update = data, None, conn, upd
                     if not self.serial and len(ready) > 1 and conn["count"] > 1:
                         self.st.error = "Multiple devices – pick one under Connection → Select device"
             except AdbError as e:
@@ -150,6 +152,9 @@ class App:
         tracking = s["running"].get("trackingservice")
         if s.get("is_quest") and tracking is False:
             r3 += c("   ·   TRACKING OFF", "red", "bold")
+        pend = (self.st.update or {}).get("pending")
+        if pend:
+            r3 += c(f"   ·   UPDATE re-enabled {len(pend['packages'])} packages → r", "yellow", "bold")
         return [r1, r2, r3]
 
     @staticmethod
@@ -349,7 +354,9 @@ class App:
     # ------------------------------------------------------------------ Main loop
     def loop(self):
         term.setup_window("Quest Tools")
-        self.refresh()
+        term.paint(self.header() + ["", "  " + c("Connecting to the headset …", "grey")])
+        self.refresh(wait=True)
+        self.offer_update_restore()
         menus = main_menu(self)
         idx = 0
         while True:
@@ -365,6 +372,31 @@ class App:
                 menus[choice][4]()
             except KeyboardInterrupt:
                 pass
+
+    def offer_update_restore(self, always: bool = False):
+        """After a firmware update: offer to switch the re-enabled packages off again."""
+        pend = (self.st.update or {}).get("pending")
+        hwid = (self.st.data or {}).get("hwid")
+        if not pend or not hwid:
+            if always:
+                self.message("No firmware update re-enabled any of your packages.", "ok")
+            return
+        n = len(pend["packages"])
+        listing = ", ".join(kb.short_name(p) for p in pend["packages"])
+        ch = self.select(f"Firmware update v{pend['from']} → v{pend['to']}", [
+            Item(f"Restore now - disable the {n} packages again", "go",
+                 desc=f"A settings snapshot is taken first; every change can be undone. Packages: {listing}"),
+            Item("Dry run - show what would happen", "dry", desc=listing),
+            Item("Not now", "later", desc="Ask again next time (or use r Repair → After a firmware update)."),
+            Item("Ignore this update", "ignore", desc="Keep the packages enabled and stop asking for this update."),
+        ], subtitle=f"{n} packages you had disabled are active again")
+        if ch == "go":
+            self.run(["repair", "update"], "Restore after firmware update")
+        elif ch == "dry":
+            self.run(["repair", "update", "-n"], "Restore after firmware update (dry run)")
+        elif ch == "ignore":
+            updates.clear(hwid)
+            self.st.update = None
 
     def submenu(self, title: str, entries: list[tuple]):
         """entries: (key, label, hint, description, action)"""
@@ -707,7 +739,9 @@ def apps_menu(app: App):
             app_actions(app, pkg)
 
     def install():
-        p = term.ask("APK file(s)", hint="Enter a path or drag the file into the window; separate several with ;")
+        p = term.ask("APK/OBB file(s) or game folder",
+                     hint="Drag files or a whole folder into the window; separate several with ;  "
+                          "OBB files go to /sdcard/Android/obb/<package>/ automatically")
         if p:
             files = [x.strip().strip('"') for x in p.split(";") if x.strip()]
             app.run(["apps", "install", *files], "Install")
@@ -718,7 +752,8 @@ def apps_menu(app: App):
         ("2", "All apps", "incl. system", "All installed packages.", lambda: browse("all")),
         ("3", "Meta/Quest apps", "", "Only com.oculus.*, com.meta.*, horizon*.", lambda: browse("quest")),
         ("4", "Disabled apps", "", "All disabled packages.", lambda: browse("disabled")),
-        ("5", "Install APK", "split APKs too", "Install one or more APK files.", install),
+        ("5", "Install app (APK + OBB)", "files or a game folder", "Install APK files (split APKs too). OBB data "
+         "files in the same folder are copied to /sdcard/Android/obb/<package>/ automatically.", install),
     ])
 
 
@@ -889,6 +924,20 @@ def media(app: App):
         if ch is not None:
             app.run(["logcat", *ch], "")
 
+    def mirror():
+        eye = app.select("Live view", [
+            Item("Left eye", "left", desc="Looks like a normal screen (recommended)."),
+            Item("Right eye", "right"),
+            Item("Both eyes", "both", desc="Full side-by-side stereo panel."),
+            Item("Left eye + record to file", "rec", desc="Saves an .mp4 to the videos folder while showing it.")])
+        if not eye:
+            return
+        argv = ["mirror", "--eye", "left" if eye == "rec" else eye]
+        if eye == "rec":
+            import time as _t
+            argv += ["--record", str(transfer.default_dir("videos") / f"mirror_{_t.strftime('%Y-%m-%d_%H-%M-%S')}.mp4")]
+        app.run(argv, "Live view")
+
     def open_dir(kind):
         p = transfer.default_dir(kind)
         if hasattr(os, "startfile"):
@@ -902,6 +951,8 @@ def media(app: App):
         ("3", "System screenshot", "one eye", "Like the Quest menu: one eye, undistorted.",
          lambda: shot(["--meta", "--wake"])),
         ("4", "Record screen", "up to 180 s", "Record a video and copy it to the PC.", record),
+        ("m", "Live view on the PC", "scrcpy", "Shows the headset picture in a window on the PC (needs scrcpy). "
+         "One eye by default; the display stays on without wearing the headset.", mirror),
         ("5", "Logcat", "live, filtered", "Colored system log, Ctrl+C stops.", logcat),
         ("6", "Open screenshot folder", "", str(transfer.default_dir("screenshots")),
          lambda: open_dir("screenshots")),
@@ -981,6 +1032,13 @@ def connection(app: App):
         if ep and code:
             app.run(["wifi", "pair", ep, code], "Pairing")
 
+    def keep():
+        on = bool(store.config().get("wifi_keep"))
+        ch = app.select("Keep Wi-Fi ADB on", [Item("On", "on"), Item("Off", "off")],
+                        subtitle=f"currently {'on' if on else 'off'}", start=0 if on else 1)
+        if ch:
+            app.run(["wifi", "keep", ch], "Keep Wi-Fi ADB on")
+
     def choose():
         devs = [d for d in list_devices()]
         if not devs:
@@ -1001,6 +1059,11 @@ def connection(app: App):
         ("5", "Pairing (Android 11+)", "no USB", "Wireless debugging with a pairing code.", pair),
         ("6", "Select device", "", "When several devices are connected.", choose),
         ("7", "Show devices", "", "", lambda: app.run(["devices"], "Devices")),
+        ("f", "Find headset on the network", "LAN scan", "Scans your local network for headsets with Wi-Fi ADB "
+         "enabled and connects to them - useful when the IP address changed.",
+         lambda: app.run(["wifi", "find"], "Find headset")),
+        ("k", "Keep Wi-Fi ADB on", "auto re-enable", "Whenever the headset is connected by USB and Wi-Fi ADB is off "
+         "(e.g. after a reboot), switch it back on automatically.", keep),
     ])
 
 
@@ -1025,7 +1088,10 @@ def repair_menu(app: App):
         ("3", "Home panels missing", "enable ocms + restart shell", "Only passthrough and the system bar, no home, "
          "library or universal menu ('Placement request Timeout'). Enables com.oculus.ocms and restarts the VR shell.",
          lambda: run_fix("panels", "Repair panels")),
-        ("4", "Controllers / tracking dead", "reboot", "The tracking service crashed and cannot be restarted from "
+        ("4", "After a firmware update", "re-disable packages", "Horizon OS updates switch disabled packages "
+         "back on. Restores the state from before the update (settings snapshot first).",
+         lambda: app.offer_update_restore(always=True)),
+        ("5", "Controllers / tracking dead", "reboot", "The tracking service crashed and cannot be restarted from "
          "adb - a reboot brings 6DoF and the controllers back.", lambda: app.run(["repair", "tracking"], "Repair tracking")),
     ])
 

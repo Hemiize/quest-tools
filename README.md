@@ -38,10 +38,18 @@
 - **One-click repairs** for the classic debloat accidents: Store purchases gone, apps listed under
   *Unknown sources*, Store apps that won't install, missing home panels, dead controllers. Each fix
   is the procedure that actually worked on a real Quest 3.
-- **Firmware-update aware.** Horizon OS updates silently re-enable packages. Quest Tools notices and
-  restores your profile with one action.
-- **Backups that matter.** Settings snapshots with diff and selective restore, and app backups that
-  include your **save games** (`/sdcard/Android/data` and `obb`).
+- **Survives firmware updates.** Horizon OS updates silently switch your disabled packages back on.
+  Quest Tools notices on the next start and offers to restore the pre-update state with one key,
+  after taking a settings snapshot.
+- **Backups that matter.** Settings snapshots with diff and selective restore, an **automatic safety
+  snapshot** before every risky change, and app backups that include your **save games**
+  (`/sdcard/Android/data` and `obb`).
+- **Wi-Fi ADB that stays.** Finds the headset on your network when its IP changed, and can keep Wi-Fi
+  ADB switched on: it is re-enabled automatically whenever the headset is on USB, e.g. after a reboot.
+- **Sideloading with OBB data.** Drop an APK, an OBB or a whole game folder. Split APKs are installed
+  together and OBB files land in `/sdcard/Android/obb/<package>/`.
+- **Live view on your PC** via [scrcpy](https://github.com/Genymobile/scrcpy), cropped to one eye so it
+  looks like a normal screen. The display stays on without wearing the headset.
 - **Performance tuning.** CPU/GPU levels, fixed foveated rendering, eye-buffer resolution, refresh
   rate, presets and a live monitor.
 - **Zero dependencies.** Pure Python standard library plus `adb`. Every function also works from the
@@ -64,6 +72,7 @@ so every feature, profile and knowledge-base entry applies to both.
 - A **Meta Quest 3 or 3S**
 - Python **3.10+**
 - Android platform tools (`adb`): [download](https://developer.android.com/tools/releases/platform-tools)
+- *Optional:* [scrcpy](https://github.com/Genymobile/scrcpy) for the live view (`winget install Genymobile.scrcpy`)
 - Developer mode enabled on the Quest (via the Meta Horizon phone app), with USB debugging allowed
   when the headset asks
 
@@ -113,13 +122,13 @@ Quest Tools finds `adb` on its own: the `adb_path` setting, then `QUESTTOOLS_ADB
 | 2 | **Privacy & Debloat** | telemetry report · check / apply profile (with dry run) · disable & enable packages from a checklist · full package analysis · explain a package · offline mode · Private DNS (AdGuard, Mullvad, Quad9, …) · save your own profile |
 | 3 | **Performance** | current values · presets (battery → max) · CPU/GPU level · foveation (dynamic/fixed) · eye-buffer resolution · refresh rate · reset · process list · live monitor |
 | 4 | **Headset** | FPS overlay · Guardian · proximity sensor · Phone SDK · SDK throttling · restart VR shell · reboot (normal/bootloader/recovery) · volume · key events · type text · open URL |
-| 5 | **Apps** | apps sorted by size → details & permissions · launch · stop · backup with save game · export APK · per-app logcat · grant/revoke permissions · clear data · uninstall · install APKs (drag & drop) |
+| 5 | **Apps** | apps sorted by size → details & permissions · launch · stop · backup with save game · export APK · per-app logcat · grant/revoke permissions · clear data · uninstall · install APK + OBB, files or a whole game folder (drag & drop) |
 | 6 | **Backups & Settings** | settings snapshot · diff · selective/exact restore · app backups with save games · restore · browse settings |
-| 7 | **Media** | screenshot (raw / wake headset / system) · screen recording · filtered, colourised logcat |
+| 7 | **Media** | screenshot (raw / wake headset / system) · screen recording · **live view on the PC** (scrcpy, one eye or both, optional recording) · filtered, colourised logcat |
 | 8 | **Files** | arrow-key file browser · download · delete · upload · disk usage |
-| 9 | **Connection** | one-step Wi-Fi ADB setup · connect by IP · disconnect · pairing · choose device |
+| 9 | **Connection** | one-step Wi-Fi ADB setup · **find headset on the network** · **keep Wi-Fi ADB on** · connect by IP · disconnect · pairing · choose device |
 | 0 | **Tools** | adb shell · command library · change history · undo · run any command · configuration |
-| r | **Repair** | check for known problems · fix Store purchases & installs · fix missing home panels · fix dead tracking/controllers |
+| r | **Repair** | check for known problems · fix Store purchases & installs · fix missing home panels · restore after a firmware update · fix dead tracking/controllers |
 
 ## 🛡️ How it keeps you safe
 
@@ -130,6 +139,8 @@ Quest Tools finds `adb` on its own: the `adb_path` setting, then `QUESTTOOLS_ADB
   `com.oculus.ocms`, `com.oculus.store` and `com.meta.credentialsmanager` are marked **keep**:
   without them the home panels or your purchased apps disappear. Those are skipped unless you
   pass `--force`. Protected packages such as `com.oculus.updater` are never attempted.
+- **Automatic safety snapshots.** Before packages are disabled or settings are restored, a full settings
+  snapshot is written (`settings-auto_…`, the last 10 are kept). Restore it like any other backup.
 - **Dry runs everywhere.** Profiles, restores and performance changes can show what would happen
   before anything is touched.
 - **Connection-safe restores.** `adb_enabled`, `adb_wifi_enabled`,
@@ -153,6 +164,8 @@ log, then names the fix.
 | Purchased apps disappear, show up under **Unknown sources** or say **"not purchased"** | `com.oculus.store` and/or `com.meta.credentialsmanager` disabled, so the purchase (entitlement) database is empty | **Repair → Store purchases & installs**: re-enables the store chain, refreshes the library and **reboots**. The full purchase sync only runs at boot; clearing the library app alone does not help |
 | Store apps won't download or install | store chain disabled, or offline mode on | same repair. It also offers to switch offline mode off |
 | Only passthrough and the system bar, no home, library or universal menu | `com.oculus.ocms` disabled (`Placement request Timeout` in the log) | **Repair → Home panels missing**: enables ocms and restarts the VR shell |
+| After a Horizon OS update your disabled packages are active again | firmware updates reset package states | Quest Tools asks on the next start, or **Repair → After a firmware update**: disables them again (snapshot first) |
+| Wi-Fi ADB gone after a reboot / IP changed | adb over Wi-Fi is switched off at every boot; DHCP may assign a new IP | **Connection → Keep Wi-Fi ADB on** (re-enabled whenever USB is plugged in) and **Find headset on the network** |
 | Controllers and 6DoF tracking dead | the native tracking service crashed (DSP in a bad state) | **Repair → Controllers / tracking dead**: reboot. The service cannot be restarted from adb |
 
 Quest Tools never disables `ocms`, `store` or `credentialsmanager` on its own. They are marked
@@ -171,6 +184,11 @@ python -m questtools settings restore --only secure,packages
 python -m questtools perf preset performance
 python -m questtools --json status          # machine-readable
 python -m questtools repair store --dry-run
+python -m questtools repair update             # after a firmware update
+python -m questtools apps install "C:\Games\MyGame"   # APK + OBB folder
+python -m questtools wifi find                 # find the headset on the LAN
+python -m questtools wifi keep on
+python -m questtools mirror --eye left         # live view (scrcpy)
 python -m questtools undo
 ```
 
@@ -206,9 +224,10 @@ questtools/
   store.py         configuration, journal, profiles, saved commands
   kb.py            knowledge base, classification, built-in profiles
   probe.py         full device status in a single adb call
+  updates.py       firmware-update tracking and pending restores
   transfer.py      pull/push with progress (name, MB, %)
   ui.py            colours, tables, bars, prompts
-  commands/        device, repair, debloat, perf, quest, apps, settings, net, media, files, backup, tools
+  commands/        device, repair, debloat, perf, quest, apps, settings, net, media, mirror, files, backup, tools
 tools/
   tuidemo.py       replay the UI with scripted keys (tests, screenshots)
   termshot.py      renders the SVG screenshots in this README

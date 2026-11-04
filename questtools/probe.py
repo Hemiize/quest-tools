@@ -42,6 +42,7 @@ def collect(dev: Device, deep: bool = True) -> dict:
                      "global:development_settings_enabled global:adb_enabled global:adb_wifi_enabled "
                      "secure:user_guardian; do echo \"$k=$(settings get ${k%%:*} ${k#*:})\"; done"),
         "disabled": "pm list packages -d",
+        "installed": "pm list packages",
         "pids": "for p in com.oculus.vrshell trackingservice com.oculus.ocms; do echo \"$p=$(pidof $p)\"; done",
     }
     if deep:
@@ -113,6 +114,8 @@ def collect(dev: Device, deep: bool = True) -> dict:
     # Quest does not track developer mode in development_settings_enabled; active adb counts.
     s["dev_mode"] = "1" in (st.get("global:development_settings_enabled"), st.get("global:adb_enabled"))
 
+    s["installed"] = sorted(ln.split(":", 1)[1].strip() for ln in raw["installed"].splitlines()
+                            if ln.startswith("package:"))
     s["disabled"] = sorted(ln.split(":", 1)[1].strip() for ln in raw["disabled"].splitlines()
                            if ln.startswith("package:"))
     pids = dict(ln.split("=", 1) for ln in raw["pids"].splitlines() if "=" in ln)
