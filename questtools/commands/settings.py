@@ -11,6 +11,7 @@ Restoring shows the differences first and logs every change in the journal -
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from .. import kb, ops, store, transfer, ui
@@ -129,19 +130,48 @@ def _report(r, text, batch):
 
 # --------------------------------------------------------------------------- Backup
 
-def cmd_backup(ctx):
-    dev = ctx.dev
-    with ui.Spinner("Reading all settings …"):
-        snap = read_all(dev)
-    root = (Path(ctx.args.out) if ctx.args.out else transfer.default_dir("backups")) / \
-        f"settings_{transfer.safe_name(dev.hwid)}_{store.stamp()}"
+AUTO_KEEP = 10  # automatic safety snapshots kept per headset
+
+
+def write_backup(dev, message: str | None = None, out: Path | None = None, auto: bool = False) -> tuple[Path, dict]:
+    snap = read_all(dev)
+    base = out or transfer.default_dir("backups")
+    prefix = "settings-auto" if auto else "settings"
+    root = base / f"{prefix}_{transfer.safe_name(dev.hwid)}_{store.stamp()}"
+    n = 1
+    while root.exists():  # two snapshots within the same second
+        n += 1
+        root = base / f"{prefix}_{transfer.safe_name(dev.hwid)}_{store.stamp()}-{n}"
     root.mkdir(parents=True)
-    manifest = {"tool": "questtools", "kind": "settings", "serial": dev.hwid, "model": dev.model,
+    manifest = {"tool": "questtools", "kind": "settings", "auto": auto, "serial": dev.hwid, "model": dev.model,
                 "os": dev.prop("ro.vros.build.version") or dev.prop("ro.build.version.incremental"),
-                "created": store.now_iso(), "message": ctx.args.message,
+                "created": store.now_iso(), "message": message,
                 "settings": snap["settings"], "disabled_packages": snap["disabled_packages"],
                 "props": snap["props"]}
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    if auto:
+        olds = sorted(base.glob(f"settings-auto_{transfer.safe_name(dev.hwid)}_*"))
+        for old in olds[:-AUTO_KEEP]:
+            shutil.rmtree(old, ignore_errors=True)
+    return root, snap
+
+
+def auto_backup(dev, reason: str) -> Path | None:
+    """Safety snapshot before a risky change. Never blocks the change if it fails."""
+    try:
+        with ui.Spinner("Safety snapshot of all settings …"):
+            root, _ = write_backup(dev, f"automatic: {reason}", auto=True)
+        ui.hint(f"Safety snapshot: {root.name}  (restore: questtools settings restore {root.name})")
+        return root
+    except (AdbError, OSError) as e:
+        ui.warn(f"Safety snapshot failed ({getattr(e, 'message', e)}) - continuing.")
+        return None
+
+
+def cmd_backup(ctx):
+    dev = ctx.dev
+    with ui.Spinner("Reading all settings …"):
+        root, snap = write_backup(dev, ctx.args.message, Path(ctx.args.out) if ctx.args.out else None)
     if ctx.emit({"dir": str(root)}):
         return
     n = {ns: len(v) for ns, v in snap["settings"].items()}
@@ -165,7 +195,8 @@ def _find_backup(arg: str | None, serial: str) -> tuple[Path, dict]:
                 return f.parent, m
         raise AdbError(f"Backup {arg} not found.")
     found = []
-    for d in sorted(base.glob("settings_*"), reverse=True):
+    for d in sorted([*base.glob("settings_*"), *base.glob("settings-auto_*")],
+                    key=lambda x: x.name.split("_", 2)[-1], reverse=True):
         f = d / "manifest.json"
         if f.is_file():
             m = json.loads(f.read_text(encoding="utf-8"))
@@ -274,6 +305,7 @@ def cmd_restore(ctx):
     print()
     if not ui.confirm(f"Apply {len(changes) - len(risky)} changes?", ctx.yes):
         return 1
+    auto_backup(dev, f"before restoring {d.name}")
     batch = store.Batch(dev.hwid, f"settings restore {d.name}")
     ok = fail = 0
     for ch in changes:

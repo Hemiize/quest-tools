@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 from .. import kb, ops, store, transfer, ui
-from ..adb import AdbError, check_pkg
+from ..adb import PKG_RE, AdbError, check_pkg, quote
 from ..ui import c
 from . import add, dry, group
 
@@ -31,8 +31,13 @@ def register(sub, common):
     p.add_argument("-k", "--keep-data", action="store_true", help="keep data")
     p = add(g, common, "restore", "Bring back a system app removed for user 0", cmd_restore_existing)
     p.add_argument("package")
-    p = add(g, common, "install", "Install APK(s); several files = split APK", cmd_install, aliases=["i"])
-    p.add_argument("apks", nargs="+")
+    p = add(g, common, "install", "Install APK(s) + OBB data; accepts files or a game folder", cmd_install,
+            aliases=["i"], description="Install an app. Pass APK files, OBB files or a whole folder (e.g. an "
+            "extracted sideload pack): all .apk files are installed together (split APK), all .obb files are "
+            "copied to /sdcard/Android/obb/<package>/.")
+    p.add_argument("apks", nargs="+", metavar="PATH", help="APK/OBB files or folders")
+    p.add_argument("--obb", metavar="DIR", help="extra folder with OBB files")
+    p.add_argument("--package", help="package name for the OBB folder (normally detected automatically)")
     p.add_argument("-g", "--grant", action="store_true", help="grant all runtime permissions")
     p.add_argument("-d", "--downgrade", action="store_true", help="allow an older version")
     p = add(g, common, "export", "Pull an app's APK(s) to the PC", cmd_export, aliases=["pull"])
@@ -231,11 +236,69 @@ def cmd_restore_existing(ctx):
     ui.ok(f"{pkg} is installed again.")
 
 
+OBB_RE = re.compile(r"^(?:main|patch)\.\d+\.([A-Za-z][\w.]*\.[\w.]+)\.obb$", re.I)
+
+
+def collect_install_files(paths: list[str], extra_obb: str | None = None) -> tuple[list[Path], list[Path]]:
+    """Expands files and folders into (apks, obbs)."""
+    apks, obbs = [], []
+    for raw in [*paths, *([extra_obb] if extra_obb else [])]:
+        p = Path(raw.strip().strip('"'))
+        if p.is_dir():
+            apks += sorted(x for x in p.rglob("*.apk") if x.is_file())
+            obbs += sorted(x for x in p.rglob("*.obb") if x.is_file())
+        elif p.is_file() and p.suffix.lower() == ".apk":
+            apks.append(p)
+        elif p.is_file() and p.suffix.lower() == ".obb":
+            obbs.append(p)
+        else:
+            raise AdbError(f"{p} is not an APK, OBB or folder.")
+    return list(dict.fromkeys(apks)), list(dict.fromkeys(obbs))
+
+
+def obb_package(obbs: list[Path]) -> str | None:
+    """Package name from OBB names (main.123.com.foo.bar.obb) or from the folder they are in."""
+    for o in obbs:
+        m = OBB_RE.match(o.name)
+        if m:
+            return m.group(1)
+    for o in obbs:
+        if PKG_RE.match(o.parent.name):
+            return o.parent.name
+    return None
+
+
 def cmd_install(ctx):
-    files = [Path(f) for f in ctx.args.apks]
-    for f in files:
-        if not f.is_file():
-            raise AdbError(f"{f} not found.")
+    dev = ctx.dev
+    files, obbs = collect_install_files(ctx.args.apks, ctx.args.obb)
+    if not files and not obbs:
+        raise AdbError("No .apk or .obb files found.")
+    pkg = ctx.args.package or obb_package(obbs)
+    if pkg:
+        check_pkg(pkg)
+    before = dev.packages("-3") if obbs and not pkg else set()
+    if files:
+        _install_apks(ctx, files)
+    if obbs:
+        if not pkg:
+            new = dev.packages("-3") - before
+            pkg = next(iter(new)) if len(new) == 1 else None
+        if not pkg:
+            raise AdbError("Cannot tell which app the OBB files belong to.",
+                           "Pass it explicitly: questtools apps install <files> --package com.example.game")
+        remote = f"/sdcard/Android/obb/{pkg}/"
+        dev.sh_ok(f"mkdir -p {quote(remote)}", f"Cannot create {remote}.")
+        total = sum(o.stat().st_size for o in obbs)
+        ui.info(f"Copying {len(obbs)} OBB file(s) ({ui.human_bytes(total)}) to {remote}")
+        for o in obbs:
+            transfer.push(dev, o, remote)
+        sizes = transfer.remote_size(dev, remote.rstrip("/")) or 0
+        if sizes + 64 * 1024 < total:
+            raise AdbError(f"OBB copy incomplete ({ui.human_bytes(sizes)} of {ui.human_bytes(total)}).")
+        ui.ok(f"OBB data in place for {pkg}.")
+
+
+def _install_apks(ctx, files: list[Path]):
     flags = ["-r"] + (["-g"] if ctx.args.grant else []) + (["-d"] if ctx.args.downgrade else [])
     verb = "install-multiple" if len(files) > 1 else "install"
     size = sum(f.stat().st_size for f in files)
@@ -250,6 +313,7 @@ def cmd_install(ctx):
         raise AdbError(f"Installation failed: {msg.group(1) if msg else 'unknown'}",
                        hint.get(code, (r.out + r.err).strip()))
     ui.ok("Installed: " + ", ".join(f.name for f in files))
+    return True
 
 
 def export_apks(dev, pkg: str, dest: Path) -> list[Path]:

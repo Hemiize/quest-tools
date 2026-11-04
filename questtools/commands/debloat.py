@@ -171,6 +171,9 @@ def _apply_list(ctx, targets: list[str], label: str, force: bool, disable: bool 
     print()
     if not ui.confirm(f"{verb} {len(plan)} packages?", ctx.yes, default=True):
         return None
+    if disable:
+        from .settings import auto_backup
+        auto_backup(dev, label)
     batch = store.Batch(dev.hwid, label)
     results = []
     for i, p in enumerate(plan, 1):

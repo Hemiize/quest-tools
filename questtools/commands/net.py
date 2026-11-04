@@ -32,6 +32,11 @@ def register(sub, common):
     p.add_argument("endpoint")
     p.add_argument("code")
     add(g, common, "ip", "Show the headset's IP address", cmd_ip)
+    p = add(g, common, "find", "Search the local network for headsets with Wi-Fi ADB and connect", cmd_find)
+    p.add_argument("--all", action="store_true", help="also connect Quest headsets seen for the first time")
+    p = add(g, common, "keep", "Keep Wi-Fi ADB on: re-enable it automatically whenever the headset is on USB",
+            cmd_keep)
+    p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
 
     p = dry(add(sub, common, "offline", "Cut the headset off from the internet (DNS blackhole, LAN keeps working)", cmd_offline))
     p.add_argument("state", nargs="?", choices=["on", "off", "status"], default="status")
@@ -199,3 +204,41 @@ def cmd_dns(ctx):
         return
     ui.ok(f"Private DNS: {host}")
     ui.hint("Check: open a page in the headset. If nothing loads → questtools dns auto")
+
+
+def cmd_find(ctx):
+    from ..adb import find_wifi_headsets, local_subnets
+    nets = local_subnets()
+    if not nets:
+        raise AdbError("No private network found on this PC.")
+    with ui.Spinner(f"Scanning {', '.join(n + '.0/24' for n in nets)} for Wi-Fi ADB …"):
+        found = find_wifi_headsets(known_only=not ctx.args.all)
+    if ctx.emit([{"endpoint": ep, "hwid": hw} for ep, hw in found]):
+        return
+    if not found:
+        ui.warn("No headset with Wi-Fi ADB found.")
+        ui.hint("After a reboot Wi-Fi ADB is off - plug in USB once (questtools wifi connect), "
+                "or turn on keep-alive: questtools wifi keep on")
+        if not store.config().get("known"):
+            ui.hint("Only known headsets are connected. Connect once over USB, or use --all.")
+        return 1
+    store.set_config("last_wifi", found[0][0])
+    for ep, hw in found:
+        model = store.config().get("known", {}).get(hw, {}).get("model") or "headset"
+        ui.ok(f"Connected: {model} at {ep}")
+
+
+def cmd_keep(ctx):
+    st = ctx.args.state
+    if st in ("on", "off"):
+        store.set_config("wifi_keep", st == "on")
+    on = bool(store.config().get("wifi_keep"))
+    if ctx.emit({"wifi_keep": on}):
+        return
+    if on:
+        ui.ok("Keep-alive is ON: whenever the headset is connected by USB and Wi-Fi ADB is off "
+              "(e.g. after a reboot), Quest Tools switches it back on.")
+        ui.hint("Without USB after a reboot the headset cannot be reached - that is an Android limit.")
+    else:
+        ui.info("Keep-alive is off. Turn on: questtools wifi keep on")
+
