@@ -1154,6 +1154,9 @@ def tools_menu(app: App):
          raw_cmd),
         ("7", "Configuration", "", "", lambda: app.run(["config", "show"], "Configuration")),
         ("8", "Set adb path", "", "In case adb is not found automatically.", adb_path),
+        ("s", "Install / update scrcpy", "for the live view", "Downloads the latest scrcpy from GitHub "
+         "(checksum verified) into Quest Tools' folder. Only needed for Media → Live view.",
+         lambda: app.run(["install-scrcpy", "--update"], "Install scrcpy")),
         ("9", "Help for all commands", "", "Overview of all command-line commands.", lambda: app.run(["--help"], "Help")),
     ])
 
