@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "questtools"
+version = "1.0.0"
+description = "Control your Meta Quest 3 / 3S over ADB from a terminal UI - debloat, telemetry, performance, backups, everything reversible."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "hemiize" }]
+keywords = ["meta-quest", "quest-3", "quest-3s", "adb", "debloat", "privacy", "telemetry", "tui"]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Hemiize/quest-tools"
+
+[project.scripts]
+questtools = "questtools.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["questtools*"]
