@@ -423,6 +423,9 @@ def main_menu(app: App) -> list[tuple]:
          "connect/disconnect, pairing, select device.", lambda: connection(app)),
         ("0", "Tools", "shell, history, undo", "adb shell, command library, change log, "
          "undo changes, Quest Tools settings.", lambda: tools_menu(app)),
+        ("r", "Repair", "purchases, panels, tracking", "Detect and fix known problems: Store purchases gone "
+         "or apps under 'Unknown sources', Store apps that will not install, missing home panels, dead "
+         "controllers/tracking.", lambda: repair_menu(app)),
     ]
 
 
@@ -1002,6 +1005,30 @@ def connection(app: App):
 
 
 # ---------------------------------------------------------------------- 0 Tools
+
+def repair_menu(app: App):
+    def run_fix(kind: str, title: str):
+        mode = app.select(title, [
+            Item("Dry run - show the steps", "dry", desc="Shows what would be changed. Nothing is touched."),
+            Item("Repair now", "go", desc="Runs the fix. Package changes are journaled and can be undone.")])
+        if mode:
+            app.run(["repair", kind] + (["-n"] if mode == "dry" else []), title)
+
+    app.submenu("Repair", [
+        ("1", "Check for problems", "packages, logs, services", "Looks for disabled store/panel packages, "
+         "offline mode, known error lines in the system log and dead services. Run it right after a problem.",
+         lambda: app.run(["repair", "check"], "Repair check")),
+        ("2", "Store purchases & installs", "re-enable + reboot", "Purchased apps gone, listed under 'Unknown "
+         "sources' or 'not purchased', Store apps will not install. Re-enables ocms, store and "
+         "credentialsmanager, turns offline mode off if needed, refreshes the library and reboots - the purchase "
+         "sync only runs at boot.", lambda: run_fix("store", "Repair Store")),
+        ("3", "Home panels missing", "enable ocms + restart shell", "Only passthrough and the system bar, no home, "
+         "library or universal menu ('Placement request Timeout'). Enables com.oculus.ocms and restarts the VR shell.",
+         lambda: run_fix("panels", "Repair panels")),
+        ("4", "Controllers / tracking dead", "reboot", "The tracking service crashed and cannot be restarted from "
+         "adb - a reboot brings 6DoF and the controllers back.", lambda: app.run(["repair", "tracking"], "Repair tracking")),
+    ])
+
 
 def tools_menu(app: App):
     def shell():

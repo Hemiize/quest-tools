@@ -35,6 +35,9 @@
 - **Debloat that knows what it's doing.** A curated knowledge base marks packages as
   *recommended*, *optional*, *caution*, *keep* or *protected*. It never disables the services that
   break your home panels or purchased apps.
+- **One-click repairs** for the classic debloat accidents: Store purchases gone, apps listed under
+  *Unknown sources*, Store apps that won't install, missing home panels, dead controllers. Each fix
+  is the procedure that actually worked on a real Quest 3.
 - **Firmware-update aware.** Horizon OS updates silently re-enable packages. Quest Tools notices and
   restores your profile with one action.
 - **Backups that matter.** Settings snapshots with diff and selective restore, and app backups that
@@ -116,6 +119,7 @@ Quest Tools finds `adb` on its own: the `adb_path` setting, then `QUESTTOOLS_ADB
 | 8 | **Files** | arrow-key file browser · download · delete · upload · disk usage |
 | 9 | **Connection** | one-step Wi-Fi ADB setup · connect by IP · disconnect · pairing · choose device |
 | 0 | **Tools** | adb shell · command library · change history · undo · run any command · configuration |
+| r | **Repair** | check for known problems · fix Store purchases & installs · fix missing home panels · fix dead tracking/controllers |
 
 ## 🛡️ How it keeps you safe
 
@@ -138,6 +142,22 @@ Quest Tools finds `adb` on its own: the `adb_path` setting, then `QUESTTOOLS_ADB
 | `telemetry` | telemetry, crash/bug-report uploaders, metrics, ad ID, promotions, federated learning, cloud backup |
 | `privacy` | everything in `telemetry` plus unused Meta convenience services (assistant, social, casting, remote desktop, …) |
 
+## 🩺 Troubleshooting
+
+Open **r Repair → Check for problems** (or run `python -m questtools repair`) right after something goes
+wrong. It checks package states, offline mode, running services and known error lines in the system
+log, then names the fix.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Purchased apps disappear, show up under **Unknown sources** or say **"not purchased"** | `com.oculus.store` and/or `com.meta.credentialsmanager` disabled, so the purchase (entitlement) database is empty | **Repair → Store purchases & installs**: re-enables the store chain, refreshes the library and **reboots**. The full purchase sync only runs at boot; clearing the library app alone does not help |
+| Store apps won't download or install | store chain disabled, or offline mode on | same repair. It also offers to switch offline mode off |
+| Only passthrough and the system bar, no home, library or universal menu | `com.oculus.ocms` disabled (`Placement request Timeout` in the log) | **Repair → Home panels missing**: enables ocms and restarts the VR shell |
+| Controllers and 6DoF tracking dead | the native tracking service crashed (DSP in a bad state) | **Repair → Controllers / tracking dead**: reboot. The service cannot be restarted from adb |
+
+Quest Tools never disables `ocms`, `store` or `credentialsmanager` on its own. They are marked
+**keep**, and forcing them prints an explicit warning.
+
 ## ⌨️ Command line
 
 Every menu action is also a command, which makes it handy for scripts and automation:
@@ -150,6 +170,7 @@ python -m questtools settings backup -m "before experimenting"
 python -m questtools settings restore --only secure,packages
 python -m questtools perf preset performance
 python -m questtools --json status          # machine-readable
+python -m questtools repair store --dry-run
 python -m questtools undo
 ```
 
@@ -187,7 +208,7 @@ questtools/
   probe.py         full device status in a single adb call
   transfer.py      pull/push with progress (name, MB, %)
   ui.py            colours, tables, bars, prompts
-  commands/        device, debloat, perf, quest, apps, settings, net, media, files, backup, tools
+  commands/        device, repair, debloat, perf, quest, apps, settings, net, media, files, backup, tools
 tools/
   tuidemo.py       replay the UI with scripted keys (tests, screenshots)
   termshot.py      renders the SVG screenshots in this README

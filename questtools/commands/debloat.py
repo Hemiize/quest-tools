@@ -143,6 +143,9 @@ def _apply_list(ctx, targets: list[str], label: str, force: bool, disable: bool 
             skipped.append((p, "protected - cannot be disabled"))
         elif disable and e and e.verdict == kb.KEEP and not force:
             skipped.append((p, "keep! " + e.note))
+        elif disable and p in kb.STORE_CHAIN and force:
+            ui.warn(f"--force: disabling {p} breaks Store purchases and installs. Undo or: questtools repair store")
+            plan.append(p)
         else:
             plan.append(p)
     verb = "Disable" if disable else "Enable"

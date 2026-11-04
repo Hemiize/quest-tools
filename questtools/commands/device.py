@@ -201,12 +201,19 @@ def cmd_doctor(ctx):
     for pkg in s["disabled"]:
         e = kb.lookup(pkg)
         if e and e.verdict == kb.KEEP:
-            findings.append(("err", f"{pkg} is disabled - {e.note}", f"questtools debloat enable {pkg}"))
+            fix = ("questtools repair store" if pkg in kb.STORE_CHAIN else
+                   "questtools repair panels" if pkg in kb.PANEL_CHAIN else f"questtools debloat enable {pkg}")
+            findings.append(("err", f"{pkg} is disabled - {e.note}", fix))
     if s["is_quest"]:
         if not s["running"].get("trackingservice"):
-            findings.append(("err", "Tracking service is not running (controllers/6DoF dead).", "questtools quest reboot"))
+            findings.append(("err", "Tracking service is not running (controllers/6DoF dead).", "questtools repair tracking"))
         if not s["running"].get("com.oculus.vrshell"):
-            findings.append(("warn", "VR shell is not running.", "questtools quest shell-restart"))
+            findings.append(("warn", "VR shell is not running.", "questtools repair panels"))
+        # known failure patterns in the log, and offline mode blocking the Store
+        from .repair import diagnose
+        for f in diagnose(ctx.dev):
+            if f["source"] in ("log", "offline"):
+                findings.append(("warn", f["text"] + (f" ({f['detail']})" if f["source"] == "offline" else ""), f["fix"]))
 
     prof = store.config().get("profile", {}).get(s["hwid"])
     if prof:
@@ -238,7 +245,8 @@ def cmd_doctor(ctx):
     if st and st["total"] and st["free"] / st["total"] < 0.08:
         findings.append(("warn", f"Storage almost full ({ui.human_bytes(st['free'])} free).", "questtools apps list --sort size"))
     p = s["perf"]
-    active = [k for k in ("cpu", "gpu", "ffr", "tex_w") if p.get(k)]
+    labels = {"cpu": "CPU level", "gpu": "GPU level", "ffr": "foveation", "tex_w": "resolution", "refresh": "refresh rate"}
+    active = [f"{labels[k]} {p[k]}" + (f"x{p['tex_h']}" if k == "tex_w" else "") for k in labels if p.get(k)]
     if active:
         findings.append(("info", "Performance overrides active (until reboot): " + ", ".join(active),
                          "questtools perf reset"))
