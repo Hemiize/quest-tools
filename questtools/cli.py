@@ -8,9 +8,9 @@ import sys
 
 from . import __version__, ui
 from .adb import AdbError, Device, pick
-from .commands import apps, backup, debloat, device, files, media, net, perf, quest, settings, tools
+from .commands import apps, backup, debloat, device, files, media, net, perf, quest, repair, settings, tools
 
-MODULES = [device, quest, perf, debloat, apps, settings, net, media, files, backup, tools]
+MODULES = [device, repair, quest, perf, debloat, apps, settings, net, media, files, backup, tools]
 
 
 class Ctx:

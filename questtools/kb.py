@@ -28,11 +28,15 @@ KB: dict[str, Entry] = {
     "com.oculus.q4bservice": Entry(PROTECTED, "Quest for Business service. Cannot be disabled via adb."),
 
     # ---- always keep -----------------------------------------------------
-    "com.oculus.ocms": Entry(KEEP, "Content/app management. Without ocms there are no home panels, library "
-                                   "or universal menu (VrShell: Placement request Timeout)."),
-    "com.oculus.store": Entry(KEEP, "License sync. Without the store, purchased apps disappear from the "
-                                    "library (\"not purchased\")."),
-    "com.meta.credentialsmanager": Entry(KEEP, "Account/license sign-in, required for the store sync."),
+    "com.oculus.ocms": Entry(KEEP, "Content/app management and the entitlement (purchase) database. Without "
+                                   "ocms the home panels, library and universal menu do not load "
+                                   "(VrShell: Placement request Timeout). Fix: questtools repair panels"),
+    "com.oculus.store": Entry(KEEP, "Store and license sync. Disabled = purchased apps show up under 'Unknown "
+                                    "sources' / report 'not purchased', and store apps cannot be installed. "
+                                    "Fix: questtools repair store"),
+    "com.meta.credentialsmanager": Entry(KEEP, "Account sign-in for the store sync. Disabled together with the store, "
+                                               "the entitlement sync fails and purchases disappear. "
+                                               "Fix: questtools repair store"),
     "com.oculus.vrshell": Entry(KEEP, "The VR shell itself."),
     "com.oculus.systemux": Entry(KEEP, "System UI (settings, bars)."),
     "com.oculus.horizon": Entry(KEEP, "Horizon platform service (account, store backend, platform API)."),
@@ -82,6 +86,26 @@ KB: dict[str, Entry] = {
     "com.facebook.horizon": Entry(CAUTION, "Horizon Worlds / social hub."),
     "com.oculus.horizonmediaplayer": Entry(CAUTION, "System media player."),
 }
+
+# Packages that must stay enabled for a feature to work. Disabling any one of them breaks
+# the feature; "repair" re-enables the whole chain. (Observed on Quest 3, Horizon OS v209.)
+STORE_CHAIN = ["com.oculus.ocms", "com.oculus.store", "com.meta.credentialsmanager", "com.oculus.horizon",
+               "horizon.platform.service", "horizon.platform.providers"]
+PANEL_CHAIN = ["com.oculus.ocms", "com.oculus.vrshell", "com.oculus.systemux"]
+
+# Log lines that identify known failures: (regex, issue id, explanation)
+LOG_SIGNATURES = [
+    (r"not in users library", "store",
+     "Installed apps are not in your library - the purchase (entitlement) database is empty."),
+    (r"Entitlement .* not found", "store",
+     "The system cannot find entitlements for apps - purchases look missing."),
+    (r"OVRLibrary: null cursor", "store",
+     "The OCMS content provider returns nothing - library and purchases are empty."),
+    (r"Placement request Timeout", "panels",
+     "The VR shell cannot place its panels - home, library and universal menu are missing."),
+    (r"hexagonNNFlatbuffersRun failed|AEE_EBADSTATE", "tracking",
+     "The tracking service crashed (DSP in a bad state) - controllers/6DoF stop working until a reboot."),
+]
 
 # Built-in profiles: packages that should be disabled.
 BUILTIN_PROFILES: dict[str, dict] = {
