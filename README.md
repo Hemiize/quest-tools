@@ -49,7 +49,8 @@
 - **Sideloading with OBB data.** Drop an APK, an OBB or a whole game folder. Split APKs are installed
   together and OBB files land in `/sdcard/Android/obb/<package>/`.
 - **Live view on your PC** via [scrcpy](https://github.com/Genymobile/scrcpy), cropped to one eye so it
-  looks like a normal screen. The display stays on without wearing the headset.
+  looks like a normal screen. The display stays on without wearing the headset. scrcpy is downloaded
+  and set up automatically on first use (SHA-256 verified).
 - **Performance tuning.** CPU/GPU levels, fixed foveated rendering, eye-buffer resolution, refresh
   rate, presets and a live monitor.
 - **Zero dependencies.** Pure Python standard library plus `adb`. Every function also works from the
@@ -72,7 +73,9 @@ so every feature, profile and knowledge-base entry applies to both.
 - A **Meta Quest 3 or 3S**
 - Python **3.10+**
 - Android platform tools (`adb`): [download](https://developer.android.com/tools/releases/platform-tools)
-- *Optional:* [scrcpy](https://github.com/Genymobile/scrcpy) for the live view (`winget install Genymobile.scrcpy`)
+- [scrcpy](https://github.com/Genymobile/scrcpy) for the live view is **installed automatically** the first time you
+  open it: the latest release is downloaded from GitHub, checksum-verified and kept in Quest Tools' own folder.
+  An existing installation (winget, scoop, PATH) is used if present.
 - Developer mode enabled on the Quest (via the Meta Horizon phone app), with USB debugging allowed
   when the headset asks
 
@@ -127,7 +130,7 @@ Quest Tools finds `adb` on its own: the `adb_path` setting, then `QUESTTOOLS_ADB
 | 7 | **Media** | screenshot (raw / wake headset / system) · screen recording · **live view on the PC** (scrcpy, one eye or both, optional recording) · filtered, colourised logcat |
 | 8 | **Files** | arrow-key file browser · download · delete · upload · disk usage |
 | 9 | **Connection** | one-step Wi-Fi ADB setup · **find headset on the network** · **keep Wi-Fi ADB on** · connect by IP · disconnect · pairing · choose device |
-| 0 | **Tools** | adb shell · command library · change history · undo · run any command · configuration |
+| 0 | **Tools** | adb shell · command library · change history · undo · run any command · install/update scrcpy · configuration |
 | r | **Repair** | check for known problems · fix Store purchases & installs · fix missing home panels · restore after a firmware update · fix dead tracking/controllers |
 
 ## 🛡️ How it keeps you safe
@@ -188,7 +191,8 @@ python -m questtools repair update             # after a firmware update
 python -m questtools apps install "C:\Games\MyGame"   # APK + OBB folder
 python -m questtools wifi find                 # find the headset on the LAN
 python -m questtools wifi keep on
-python -m questtools mirror --eye left         # live view (scrcpy)
+python -m questtools mirror --eye left         # live view (installs scrcpy on first use)
+python -m questtools install-scrcpy --update    # update scrcpy
 python -m questtools undo
 ```
 
@@ -225,6 +229,7 @@ questtools/
   kb.py            knowledge base, classification, built-in profiles
   probe.py         full device status in a single adb call
   updates.py       firmware-update tracking and pending restores
+  scrcpy_install.py  downloads, verifies and installs scrcpy for the live view
   transfer.py      pull/push with progress (name, MB, %)
   ui.py            colours, tables, bars, prompts
   commands/        device, repair, debloat, perf, quest, apps, settings, net, media, mirror, files, backup, tools

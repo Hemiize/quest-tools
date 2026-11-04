@@ -19,12 +19,15 @@ from ..adb import AdbError, find_adb
 from ..ui import c
 from . import add, dry
 
-INSTALL_HINT = ("Install scrcpy: winget install Genymobile.scrcpy  ·  scoop install scrcpy  ·  "
-                "https://github.com/Genymobile/scrcpy/releases\n"
-                "or point Quest Tools at it: questtools config set scrcpy_path C:\\path\\to\\scrcpy.exe")
+INSTALL_HINT = ("Let Quest Tools install it: questtools mirror --install-scrcpy\n"
+                "or install it yourself (winget install Genymobile.scrcpy · scoop install scrcpy) and, if needed, "
+                "point Quest Tools at it: questtools config set scrcpy_path C:\\path\\to\\scrcpy.exe")
 
 
 def register(sub, common):
+    p = dry(add(sub, common, "install-scrcpy", "Download/update scrcpy for the live view (into Quest Tools' folder)",
+                cmd_install))
+    p.add_argument("--update", action="store_true", help="re-download even if this version is already installed")
     p = dry(add(sub, common, "mirror", "Live view of the headset on the PC (needs scrcpy)", cmd_mirror,
                 aliases=["view"], description="Shows the headset picture in a window on the PC using scrcpy. "
                 "By default only one eye is shown; the proximity sensor is overridden while the window is "
@@ -36,6 +39,19 @@ def register(sub, common):
     p.add_argument("--audio", action="store_true", help="also forward audio (Android 11+)")
     p.add_argument("--record", metavar="FILE", help="additionally record to an .mp4/.mkv file")
     p.add_argument("--no-wake", action="store_true", help="do not wake the headset / override the sensor")
+    p.add_argument("--install-scrcpy", action="store_true",
+                   help="download/update scrcpy into Quest Tools' folder (also happens automatically when missing)")
+
+
+def cmd_install(ctx):
+    from ..scrcpy_install import install, latest_release
+    if ctx.dry:
+        info = latest_release()
+        ui.info(f"Dry run: would download {info['name']} ({ui.human_bytes(info['size'])}), "
+                f"SHA-256 {info['sha256'][:16]}…")
+        return
+    exe = install(force=ctx.args.update)
+    ctx.emit({"scrcpy": exe})
 
 
 def find_scrcpy() -> str | None:
@@ -72,10 +88,22 @@ def build_args(exe: str, serial: str, panel: tuple[int, int] | None, a, title: s
 
 
 def cmd_mirror(ctx):
-    dev = ctx.dev
+    from ..scrcpy_install import install, latest_release
     exe = find_scrcpy()
-    if not exe and not ctx.dry:
-        raise AdbError("scrcpy was not found.", INSTALL_HINT)
+    if ctx.args.install_scrcpy and not ctx.dry:
+        exe = install(force=True)
+    elif not exe and not ctx.dry:
+        ui.warn("The live view needs scrcpy (free, open source: github.com/Genymobile/scrcpy).")
+        try:
+            info = latest_release()
+            question = (f"Download scrcpy {info['version']} ({ui.human_bytes(info['size'])}) from GitHub and install "
+                        "it for Quest Tools?")
+        except AdbError:
+            question = "Download scrcpy from GitHub and install it for Quest Tools?"
+        if not ui.confirm(question, ctx.yes, default=True):
+            raise AdbError("scrcpy was not found.", INSTALL_HINT)
+        exe = install()
+    dev = ctx.dev
     m = re.search(r"Physical size:\s*(\d+)x(\d+)", dev.sh("wm size").out)
     panel = (int(m.group(1)), int(m.group(2))) if m else None
     if ctx.args.record and not Path(ctx.args.record).parent.exists():
